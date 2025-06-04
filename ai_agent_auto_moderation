@@ -1,0 +1,82 @@
+import os
+import asyncio
+import json
+import pandas as pd
+from langchain_openai import AzureChatOpenAI
+from pydantic import SecretStr
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Text examples covering multiple categories
+test_posts = [
+    {"text": "Limited time offer! Win $1000 by clicking this link ➡️ bit.ly/fakeprize"},
+    {"text": "Just had the best coffee at the new downtown café. Highly recommend!"},
+    {"text": "You're all idiots if you believe that nonsense. Go educate yourselves!"},
+    {"text": "Meeting reminder: Team sync at 3pm in Conference Room B"},
+    {"text": "FREE ROBUX GENERATOR 2024 WORKING 100% REAL NO SURVEY robux-free.com"},
+    {"text": "The way they treat employees here is disgusting. HR should be ashamed."},
+    {"text": "Check out my new blog post about Python programming tips!"}
+]
+
+async def classify_post(llm: AzureChatOpenAI, text: str) -> dict:
+    """Categorize posts with confidence levels"""
+    prompt = f"""
+    Analyze this online post and respond in EXACTLY this JSON format:
+    {{
+        "category": "SPAM/NORMAL/OFFENSIVE/PROMOTIONAL/COMPLAINT",
+        "confidence": "High/Medium/Low",
+        "reason": "1-sentence explanation"
+    }}
+
+    Guidelines:
+    - SPAM = scam/fake offers/suspicious links
+    - OFFENSIVE = insults/hate speech/threats
+    - PROMOTIONAL = legitimate self-promotion
+    - COMPLAINT = negative but not offensive
+    - NORMAL = regular conversation
+
+    Post: {text}
+    """
+    response = await llm.ainvoke(prompt)
+    try:
+        return json.loads(response.content)
+    except json.JSONDecodeError:
+        return {
+            "category": "NORMAL",
+            "confidence": "Low",
+            "reason": "Failed to analyze content"
+        }
+
+async def main():
+    llm = AzureChatOpenAI(
+        model="gpt-4o-mini",
+        api_version="2024-05-01-preview",
+        azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT'),
+        api_key=SecretStr(os.getenv('AZURE_OPENAI_API_KEY')),
+        temperature=0.2
+    )
+
+    # Analyze all posts
+    results = []
+    for post in test_posts:
+        analysis = await classify_post(llm, post["text"])
+        results.append({
+            "Post Content": post["text"][:60] + "..." if len(post["text"]) > 60 else post["text"],
+            "Category": analysis["category"],
+            "Confidence": analysis["confidence"],
+            "Flags": "Please Review" if analysis["category"] in ["SPAM","OFFENSIVE"] else "",
+            "Reason": analysis["reason"]
+        })
+
+    # Display and save results
+    df = pd.DataFrame(results)
+    print("\nPOST CLASSIFICATION RESULTS:")
+    print(df.to_string(index=False, justify='left', max_colwidth=55))
+    
+    df.to_csv("post_classification_with_confidence.csv", index=False)
+    print("\nResults saved to post_classification_with_confidence.csv")
+
+if __name__ == "__main__":
+    asyncio.run(main())
